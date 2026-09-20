@@ -1,378 +1,1496 @@
 (() => {
-  "use strict";
 
-  const DEFAULT_IMAGE = "assets/source.jpg";
-  const MAX_DIM = 900;
+"use strict";
 
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d", { alpha: false });
-  const fileInput = document.getElementById("fileInput");
-  const empty = document.getElementById("emptyState");
-  const speedEl = document.getElementById("speed");
-  const thresholdEl = document.getElementById("threshold");
-  const brushEl = document.getElementById("brush");
-  const colorEl = document.getElementById("lineColor");
-  const speedOut = document.getElementById("speedOut");
-  const thresholdOut = document.getElementById("thresholdOut");
-  const brushOut = document.getElementById("brushOut");
-  const statusEl = document.getElementById("status");
-  const progressEl = document.getElementById("progress");
-  const progressBar = document.getElementById("progressBar");
-  const startBtn = document.getElementById("startBtn");
-  const pauseBtn = document.getElementById("pauseBtn");
-  const resetBtn = document.getElementById("resetBtn");
-  const downloadBtn = document.getElementById("downloadBtn");
 
-  let sourceImage = null;
-  let paths = [];
-  let drawing = false;
-  let paused = false;
-  let raf = 0;
-  let totalSteps = 0;
-  let currentStep = 0;
-  let lastTime = 0;
-  let imagePixels = null;
+/* =========================================
+   SETTINGS
+========================================= */
 
-  function setStatus(s) { statusEl.textContent = s; }
-  function setProgress(v) {
-    const p = Math.max(0, Math.min(100, v));
-    progressEl.textContent = `${Math.round(p)}%`;
-    progressBar.style.width = `${p}%`;
-  }
+const DEFAULT_IMAGE =
+    "assets/source.jpg";
 
-  function fitSize(w, h) {
-    const scale = Math.min(1, MAX_DIM / Math.max(w, h));
-    return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
-  }
+const MAX_SIZE = 900;
 
-  function drawWhiteBackground() {
-    ctx.save();
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.restore();
-  }
 
-  function loadImage(url) {
-    return new Promise((resolve, reject) => {
-      const im = new Image();
-      im.onload = () => resolve(im);
-      im.onerror = reject;
-      im.src = url;
-    });
-  }
+/* =========================================
+   ELEMENTS
+========================================= */
 
-  // Sobel-style edge score. Works especially well for line-art images,
-  // while still accepting ordinary photos through the upload control.
-  function edgeMap(w, h, data, threshold) {
-    const gray = new Float32Array(w * h);
-    for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
-      gray[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+const canvas =
+    document.getElementById("canvas");
+
+const ctx =
+    canvas.getContext(
+        "2d",
+        {
+            willReadFrequently: true
+        }
+    );
+
+
+const fileInput =
+    document.getElementById("file");
+
+const loading =
+    document.getElementById("loading");
+
+const status =
+    document.getElementById("status");
+
+const percentage =
+    document.getElementById("pct");
+
+const progressBar =
+    document.getElementById("bar");
+
+
+const detail =
+    document.getElementById("detail");
+
+const threshold =
+    document.getElementById("threshold");
+
+const lineWidth =
+    document.getElementById("width");
+
+const speed =
+    document.getElementById("speed");
+
+
+const drawButton =
+    document.getElementById("draw");
+
+const pauseButton =
+    document.getElementById("pause");
+
+
+/* =========================================
+   STATE
+========================================= */
+
+let currentImage = null;
+
+let strokes = [];
+
+let totalSteps = 0;
+
+let currentStep = 0;
+
+let animationFrame = 0;
+
+let drawing = false;
+
+let paused = false;
+
+
+/* =========================================
+   HELPERS
+========================================= */
+
+function setProgress(value) {
+
+    value =
+        Math.max(
+            0,
+            Math.min(100, value)
+        );
+
+    percentage.textContent =
+        Math.round(value) + "%";
+
+    progressBar.style.width =
+        value + "%";
+}
+
+
+function clearCanvas() {
+
+    ctx.fillStyle = "#ffffff";
+
+    ctx.fillRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+}
+
+
+function getSize(width, height) {
+
+    const scale =
+        Math.min(
+            1,
+            MAX_SIZE /
+            Math.max(width, height)
+        );
+
+    return {
+
+        width:
+            Math.round(width * scale),
+
+        height:
+            Math.round(height * scale)
+
+    };
+
+}
+
+
+/* =========================================
+   GRAYSCALE
+========================================= */
+
+function convertToGray(
+    pixels,
+    width,
+    height
+) {
+
+    const gray =
+        new Float32Array(
+            width * height
+        );
+
+
+    for (
+        let i = 0, p = 0;
+        i < gray.length;
+        i++, p += 4
+    ) {
+
+        gray[i] =
+            0.299 * pixels[p] +
+            0.587 * pixels[p + 1] +
+            0.114 * pixels[p + 2];
+
     }
 
-    const edges = new Uint8Array(w * h);
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const i = y * w + x;
-        const gx =
-          -gray[i-w-1] + gray[i-w+1] +
-          -2*gray[i-1] + 2*gray[i+1] +
-          -gray[i+w-1] + gray[i+w+1];
-        const gy =
-          -gray[i-w-1] - 2*gray[i-w] - gray[i-w+1] +
-           gray[i+w-1] + 2*gray[i+w] + gray[i+w+1];
-        const mag = Math.sqrt(gx*gx + gy*gy);
-        edges[i] = mag >= threshold ? 1 : 0;
-      }
+
+    return gray;
+
+}
+
+
+/* =========================================
+   SMALL BLUR
+========================================= */
+
+function blurImage(
+    gray,
+    width,
+    height
+) {
+
+    const result =
+        new Float32Array(
+            width * height
+        );
+
+
+    for (
+        let y = 0;
+        y < height;
+        y++
+    ) {
+
+        for (
+            let x = 0;
+            x < width;
+            x++
+        ) {
+
+            let sum = 0;
+
+            let count = 0;
+
+
+            for (
+                let dy = -1;
+                dy <= 1;
+                dy++
+            ) {
+
+                for (
+                    let dx = -1;
+                    dx <= 1;
+                    dx++
+                ) {
+
+                    const xx =
+                        x + dx;
+
+                    const yy =
+                        y + dy;
+
+
+                    if (
+                        xx >= 0 &&
+                        yy >= 0 &&
+                        xx < width &&
+                        yy < height
+                    ) {
+
+                        sum +=
+                            gray[
+                                yy * width + xx
+                            ];
+
+                        count++;
+
+                    }
+
+                }
+
+            }
+
+
+            result[
+                y * width + x
+            ] =
+                sum / count;
+
+        }
+
     }
-    return edges;
-  }
 
-  function neighborIndex(i, dx, dy, w) {
-    return i + dy * w + dx;
-  }
 
-  // Turn the binary edge field into ordered pen strokes. Each component is
-  // walked through adjacent edge pixels; components are then joined by the
-  // nearest endpoint so the animation behaves like one traveling pen.
-  function tracePaths(edges, w, h) {
-    const visited = new Uint8Array(edges.length);
-    const components = [];
-    const dirs = [
-      [-1,-1],[0,-1],[1,-1],[1,0],
-      [1,1],[0,1],[-1,1],[-1,0]
+    return result;
+
+}
+
+
+/* =========================================
+   EDGE / INK DETECTION
+========================================= */
+
+function createInkMask(
+    pixels,
+    width,
+    height
+) {
+
+    const gray =
+        convertToGray(
+            pixels,
+            width,
+            height
+        );
+
+
+    const smooth =
+        blurImage(
+            gray,
+            width,
+            height
+        );
+
+
+    const mask =
+        new Uint8Array(
+            width * height
+        );
+
+
+    const detailValue =
+        Number(detail.value);
+
+    const thresholdValue =
+        Number(threshold.value);
+
+
+    /*
+       Higher detail = more lines.
+
+       The formula is intentionally
+       conservative so photographic
+       noise does not become thousands
+       of random lines.
+    */
+
+    const required =
+        thresholdValue +
+        (90 - detailValue) * 0.55;
+
+
+    for (
+        let y = 1;
+        y < height - 1;
+        y++
+    ) {
+
+        for (
+            let x = 1;
+            x < width - 1;
+            x++
+        ) {
+
+            const i =
+                y * width + x;
+
+
+            const gx =
+                -smooth[i - width - 1] +
+                smooth[i - width + 1] +
+
+                -2 * smooth[i - 1] +
+                2 * smooth[i + 1] +
+
+                -smooth[i + width - 1] +
+                smooth[i + width + 1];
+
+
+            const gy =
+                -smooth[i - width - 1] -
+                2 * smooth[i - width] -
+                smooth[i - width + 1] +
+
+                smooth[i + width - 1] +
+                2 * smooth[i + width] +
+                smooth[i + width + 1];
+
+
+            const magnitude =
+                Math.hypot(
+                    gx,
+                    gy
+                );
+
+
+            if (
+                magnitude >=
+                required
+            ) {
+
+                mask[i] = 1;
+
+            }
+
+        }
+
+    }
+
+
+    /*
+       Remove isolated noise.
+    */
+
+    const cleaned =
+        new Uint8Array(mask);
+
+
+    for (
+        let y = 1;
+        y < height - 1;
+        y++
+    ) {
+
+        for (
+            let x = 1;
+            x < width - 1;
+            x++
+        ) {
+
+            const i =
+                y * width + x;
+
+
+            if (!mask[i])
+                continue;
+
+
+            let neighbours = 0;
+
+
+            for (
+                let dy = -1;
+                dy <= 1;
+                dy++
+            ) {
+
+                for (
+                    let dx = -1;
+                    dx <= 1;
+                    dx++
+                ) {
+
+                    if (
+                        dx === 0 &&
+                        dy === 0
+                    )
+                        continue;
+
+
+                    if (
+                        mask[
+                            (y + dy) *
+                            width +
+                            (x + dx)
+                        ]
+                    ) {
+
+                        neighbours++;
+
+                    }
+
+                }
+
+            }
+
+
+            if (
+                neighbours < 2
+            ) {
+
+                cleaned[i] = 0;
+
+            }
+
+        }
+
+    }
+
+
+    return cleaned;
+
+}
+
+
+/* =========================================
+   TRACE CONNECTED STROKES
+========================================= */
+
+function traceStrokes(
+    mask,
+    width,
+    height
+) {
+
+    const visited =
+        new Uint8Array(
+            mask.length
+        );
+
+
+    const directions = [
+
+        [-1, -1],
+        [0, -1],
+        [1, -1],
+
+        [1, 0],
+
+        [1, 1],
+        [0, 1],
+        [-1, 1],
+
+        [-1, 0]
+
     ];
 
-    const inBounds = (x,y) => x >= 0 && y >= 0 && x < w && y < h;
 
-    for (let sy = 1; sy < h - 1; sy++) {
-      for (let sx = 1; sx < w - 1; sx++) {
-        const start = sy*w + sx;
-        if (!edges[start] || visited[start]) continue;
+    const components = [];
 
-        const q = [start];
-        visited[start] = 1;
-        const comp = [];
 
-        while (q.length) {
-          const cur = q.pop();
-          comp.push(cur);
-          const cx = cur % w, cy = (cur / w) | 0;
-          for (const [dx,dy] of dirs) {
-            const nx = cx + dx, ny = cy + dy;
-            if (!inBounds(nx,ny)) continue;
-            const ni = ny*w + nx;
-            if (edges[ni] && !visited[ni]) {
-              visited[ni] = 1;
-              q.push(ni);
+    function valid(x, y) {
+
+        return (
+            x > 0 &&
+            y > 0 &&
+            x < width - 1 &&
+            y < height - 1
+        );
+
+    }
+
+
+    /*
+       First find connected line
+       components.
+    */
+
+    for (
+        let y = 1;
+        y < height - 1;
+        y++
+    ) {
+
+        for (
+            let x = 1;
+            x < width - 1;
+            x++
+        ) {
+
+            const start =
+                y * width + x;
+
+
+            if (
+                !mask[start] ||
+                visited[start]
+            )
+                continue;
+
+
+            const queue = [start];
+
+            const component = [];
+
+
+            visited[start] = 1;
+
+
+            while (
+                queue.length
+            ) {
+
+                const current =
+                    queue.pop();
+
+
+                component.push(
+                    current
+                );
+
+
+                const cx =
+                    current % width;
+
+                const cy =
+                    Math.floor(
+                        current / width
+                    );
+
+
+                for (
+                    const [dx, dy]
+                    of directions
+                ) {
+
+                    const nx =
+                        cx + dx;
+
+                    const ny =
+                        cy + dy;
+
+
+                    if (
+                        !valid(nx, ny)
+                    )
+                        continue;
+
+
+                    const next =
+                        ny * width + nx;
+
+
+                    if (
+                        mask[next] &&
+                        !visited[next]
+                    ) {
+
+                        visited[next] = 1;
+
+                        queue.push(
+                            next
+                        );
+
+                    }
+
+                }
+
             }
-          }
+
+
+            /*
+               Ignore tiny components.
+            */
+
+            if (
+                component.length >= 5
+            ) {
+
+                components.push(
+                    component
+                );
+
+            }
+
         }
-        if (comp.length >= 3) components.push(comp);
-      }
+
     }
 
-    // Remove tiny noise and convert each component into a walk. A greedy
-    // local walk keeps the pen moving along the actual contour instead of
-    // producing a random pixel reveal.
-    const paths = [];
-    for (const comp of components) {
-      const set = new Set(comp);
-      let start = comp[0];
-      let bestDegree = 99;
 
-      for (const idx of comp) {
-        const x = idx % w, y = (idx / w) | 0;
-        let degree = 0;
-        for (const [dx,dy] of dirs) {
-          const nx=x+dx, ny=y+dy;
-          if (inBounds(nx,ny) && set.has(ny*w+nx)) degree++;
+    /*
+       Main contours first.
+    */
+
+    components.sort(
+        (a, b) =>
+            b.length - a.length
+    );
+
+
+    const result = [];
+
+
+    /*
+       Convert each component into
+       an ordered pen path.
+    */
+
+    for (
+        const component
+        of components
+    ) {
+
+        const points =
+            new Set(component);
+
+        const used =
+            new Set();
+
+
+        const path = [];
+
+
+        let current =
+            component[0];
+
+        let previous = -1;
+
+
+        while (
+            current >= 0 &&
+            !used.has(current)
+        ) {
+
+            used.add(current);
+
+            path.push(current);
+
+
+            const x =
+                current % width;
+
+            const y =
+                Math.floor(
+                    current / width
+                );
+
+
+            let next = -1;
+
+            let bestScore =
+                Infinity;
+
+
+            for (
+                const [dx, dy]
+                of directions
+            ) {
+
+                const nx =
+                    x + dx;
+
+                const ny =
+                    y + dy;
+
+
+                if (
+                    !valid(nx, ny)
+                )
+                    continue;
+
+
+                const index =
+                    ny * width + nx;
+
+
+                if (
+                    !points.has(index) ||
+                    used.has(index)
+                )
+                    continue;
+
+
+                let score =
+                    Math.abs(dx) +
+                    Math.abs(dy);
+
+
+                if (
+                    index === previous
+                ) {
+
+                    score += 20;
+
+                }
+
+
+                if (
+                    score <
+                    bestScore
+                ) {
+
+                    bestScore =
+                        score;
+
+                    next =
+                        index;
+
+                }
+
+            }
+
+
+            previous =
+                current;
+
+            current =
+                next;
+
         }
-        if (degree <= 2) { start = idx; bestDegree = degree; break; }
-        if (degree < bestDegree) { bestDegree = degree; start = idx; }
-      }
 
-      const used = new Set();
-      const path = [];
-      let cur = start;
-      let prev = -1;
 
-      while (cur !== -1 && !used.has(cur)) {
-        used.add(cur);
-        path.push(cur);
-        const x = cur % w, y = (cur / w) | 0;
-        let next = -1;
-        let best = Infinity;
+        if (
+            path.length >= 5
+        ) {
 
-        for (const [dx,dy] of dirs) {
-          const nx=x+dx, ny=y+dy;
-          if (!inBounds(nx,ny)) continue;
-          const ni=ny*w+nx;
-          if (!set.has(ni) || used.has(ni)) continue;
-          const back = prev >= 0 && ni === prev ? 10 : 0;
-          const score = back + Math.abs(dx) + Math.abs(dy);
-          if (score < best) { best=score; next=ni; }
+            result.push(path);
+
         }
 
-        prev = cur;
-        cur = next;
-      }
-
-      if (path.length >= 3) paths.push(path);
     }
 
-    // Large strokes first. This makes the main silhouette appear early.
-    paths.sort((a,b) => b.length - a.length);
 
-    // Keep the animation practical on mobile by sampling extremely dense
-    // contours while preserving their shape.
-    return paths.map(path => {
-      const maxPts = 5000;
-      if (path.length <= maxPts) return path;
-      const step = path.length / maxPts;
-      const out = [];
-      for (let i=0; i<path.length; i+=step) out.push(path[Math.floor(i)]);
-      return out;
-    });
-  }
+    return result;
 
-  function prepare(img) {
-    cancelAnimationFrame(raf);
-    drawing = false;
-    paused = false;
-    currentStep = 0;
-    setProgress(0);
-    setStatus("Analyzing image…");
+}
 
-    const size = fitSize(img.naturalWidth || img.width, img.naturalHeight || img.height);
-    canvas.width = size.w;
-    canvas.height = size.h;
 
-    const work = document.createElement("canvas");
-    work.width = size.w;
-    work.height = size.h;
-    const wctx = work.getContext("2d", { willReadFrequently: true });
-    wctx.fillStyle = "#fff";
-    wctx.fillRect(0,0,size.w,size.h);
-    wctx.drawImage(img,0,0,size.w,size.h);
+/* =========================================
+   DRAW PART OF THE IMAGE
+========================================= */
 
-    const data = wctx.getImageData(0,0,size.w,size.h);
-    imagePixels = data;
-    const edges = edgeMap(size.w,size.h,data.data,Number(thresholdEl.value));
-    paths = tracePaths(edges,size.w,size.h);
-    totalSteps = paths.reduce((n,p) => n + p.length, 0);
+function render(
+    amount
+) {
 
-    drawWhiteBackground();
-    empty.style.display = "none";
-    setStatus(`${paths.length} pen strokes ready`);
-  }
+    clearCanvas();
 
-  function pointFromIndex(i) {
-    return { x: i % canvas.width, y: (i / canvas.width) | 0 };
-  }
 
-  function redraw(stepLimit) {
-    drawWhiteBackground();
     ctx.save();
-    ctx.strokeStyle = colorEl.value;
-    ctx.lineWidth = Number(brushEl.value);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
 
-    let remaining = stepLimit;
-    let drawn = 0;
 
-    for (const path of paths) {
-      if (remaining <= 0) break;
-      const take = Math.min(remaining, path.length);
-      if (take > 0) {
+    ctx.strokeStyle =
+        "#242424";
+
+
+    ctx.lineWidth =
+        Number(lineWidth.value);
+
+
+    ctx.lineCap =
+        "round";
+
+
+    ctx.lineJoin =
+        "round";
+
+
+    let remaining =
+        amount;
+
+
+    for (
+        const stroke
+        of strokes
+    ) {
+
+        if (
+            remaining <= 0
+        )
+            break;
+
+
+        const count =
+            Math.min(
+                remaining,
+                stroke.length
+            );
+
+
+        if (
+            count < 1
+        )
+            continue;
+
+
         ctx.beginPath();
-        let p = pointFromIndex(path[0]);
-        ctx.moveTo(p.x,p.y);
-        for (let j=1;j<take;j++) {
-          p = pointFromIndex(path[j]);
-          ctx.lineTo(p.x,p.y);
+
+
+        let first =
+            stroke[0];
+
+
+        let x =
+            first % canvas.width;
+
+        let y =
+            Math.floor(
+                first / canvas.width
+            );
+
+
+        ctx.moveTo(
+            x,
+            y
+        );
+
+
+        for (
+            let i = 1;
+            i < count;
+            i++
+        ) {
+
+            const point =
+                stroke[i];
+
+
+            x =
+                point %
+                canvas.width;
+
+
+            y =
+                Math.floor(
+                    point /
+                    canvas.width
+                );
+
+
+            ctx.lineTo(
+                x,
+                y
+            );
+
         }
-        if (take === 1) ctx.lineTo(p.x + 0.01,p.y + 0.01);
+
+
         ctx.stroke();
-        drawn += take;
-        remaining -= take;
-      }
+
+
+        remaining -=
+            count;
+
     }
+
+
     ctx.restore();
-    return drawn;
-  }
 
-  function animate(now) {
-    if (!drawing || paused) return;
-    const dt = Math.min(50, now - (lastTime || now));
-    lastTime = now;
+}
 
-    const base = Math.max(25, totalSteps / 55);
-    currentStep = Math.min(totalSteps, currentStep + base * Number(speedEl.value) * (dt / 16.67));
-    redraw(Math.floor(currentStep));
 
-    const pct = totalSteps ? (currentStep / totalSteps) * 100 : 100;
-    setProgress(pct);
+/* =========================================
+   PREPARE IMAGE
+========================================= */
 
-    if (currentStep >= totalSteps) {
-      drawing = false;
-      setStatus("Finished — the complete line art is drawn.");
-      startBtn.disabled = false;
-      pauseBtn.disabled = true;
-      return;
-    }
-    raf = requestAnimationFrame(animate);
-  }
+async function prepareImage(
+    source
+) {
 
-  function start() {
-    if (!paths.length) return;
-    if (currentStep >= totalSteps) currentStep = 0;
-    drawing = true;
-    paused = false;
-    pauseBtn.disabled = false;
-    startBtn.disabled = true;
-    setStatus(currentStep ? "Continuing the pen stroke…" : "Drawing…");
-    lastTime = 0;
-    raf = requestAnimationFrame(animate);
-  }
+    cancelAnimationFrame(
+        animationFrame
+    );
 
-  function pause() {
-    paused = !paused;
-    if (paused) {
-      drawing = false;
-      pauseBtn.textContent = "▶ Resume";
-      startBtn.disabled = false;
-      setStatus("Paused");
-    } else {
-      pauseBtn.textContent = "Ⅱ Pause";
-      start();
-    }
-  }
 
-  function reset() {
-    cancelAnimationFrame(raf);
     drawing = false;
+
     paused = false;
+
     currentStep = 0;
-    redraw(0);
+
+
     setProgress(0);
-    pauseBtn.disabled = true;
-    pauseBtn.textContent = "Ⅱ Pause";
-    startBtn.disabled = false;
-    setStatus("Ready — press Start drawing");
-  }
 
-  async function loadAndPrepare(img) {
-    sourceImage = img;
-    prepare(img);
-  }
 
-  fileInput.addEventListener("change", async e => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    try {
-      const url = URL.createObjectURL(file);
-      const img = await loadImage(url);
-      await loadAndPrepare(img);
-      URL.revokeObjectURL(url);
-    } catch {
-      setStatus("Could not load that image.");
+    status.textContent =
+        "Converting photo to clean line art…";
+
+
+    const size =
+        getSize(
+            source.naturalWidth ||
+            source.width,
+
+            source.naturalHeight ||
+            source.height
+        );
+
+
+    canvas.width =
+        size.width;
+
+    canvas.height =
+        size.height;
+
+
+    /*
+       Work on a smaller canvas for
+       smooth Android performance.
+    */
+
+    const work =
+        document.createElement(
+            "canvas"
+        );
+
+
+    work.width =
+        size.width;
+
+    work.height =
+        size.height;
+
+
+    const workCtx =
+        work.getContext(
+            "2d",
+            {
+                willReadFrequently:
+                    true
+            }
+        );
+
+
+    workCtx.fillStyle =
+        "#ffffff";
+
+
+    workCtx.fillRect(
+        0,
+        0,
+        size.width,
+        size.height
+    );
+
+
+    workCtx.drawImage(
+        source,
+        0,
+        0,
+        size.width,
+        size.height
+    );
+
+
+    const imageData =
+        workCtx.getImageData(
+            0,
+            0,
+            size.width,
+            size.height
+        );
+
+
+    const mask =
+        createInkMask(
+            imageData.data,
+            size.width,
+            size.height
+        );
+
+
+    strokes =
+        traceStrokes(
+            mask,
+            size.width,
+            size.height
+        );
+
+
+    totalSteps =
+        strokes.reduce(
+            (total, stroke) =>
+                total +
+                stroke.length,
+            0
+        );
+
+
+    clearCanvas();
+
+
+    loading.style.display =
+        "none";
+
+
+    status.textContent =
+        `${strokes.length} clean strokes ready`;
+
+}
+
+
+/* =========================================
+   PROGRESS
+========================================= */
+
+function updateProgress(
+    value
+) {
+
+    setProgress(
+        totalSteps
+            ? value /
+              totalSteps *
+              100
+            : 100
+    );
+
+}
+
+
+/* =========================================
+   ANIMATION
+========================================= */
+
+function animate() {
+
+    if (
+        !drawing ||
+        paused
+    )
+        return;
+
+
+    const speedValue =
+        Number(speed.value);
+
+
+    const drawingRate =
+        Math.max(
+            20,
+            totalSteps / 70
+        ) *
+        speedValue;
+
+
+    currentStep =
+        Math.min(
+            totalSteps,
+
+            currentStep +
+            drawingRate / 60
+        );
+
+
+    render(
+        Math.floor(
+            currentStep
+        )
+    );
+
+
+    updateProgress(
+        currentStep
+    );
+
+
+    if (
+        currentStep >=
+        totalSteps
+    ) {
+
+        drawing = false;
+
+
+        drawButton.disabled =
+            false;
+
+
+        pauseButton.disabled =
+            true;
+
+
+        status.textContent =
+            "Finished — line art complete.";
+
+
+        return;
+
     }
-  });
 
-  [speedEl,thresholdEl,brushEl].forEach(el => {
-    el.addEventListener("input", () => {
-      speedOut.textContent = `${Number(speedEl.value).toFixed(2).replace(/0$/,"")}×`;
-      thresholdOut.textContent = thresholdEl.value;
-      brushOut.textContent = Number(brushEl.value).toFixed(2).replace(/0$/,"");
-      if (el === thresholdEl && sourceImage) prepare(sourceImage);
-      else if (el === brushEl && paths.length) redraw(Math.floor(currentStep));
-    });
-  });
 
-  colorEl.addEventListener("input", () => {
-    if (paths.length) redraw(Math.floor(currentStep));
-  });
+    animationFrame =
+        requestAnimationFrame(
+            animate
+        );
 
-  startBtn.addEventListener("click", start);
-  pauseBtn.addEventListener("click", pause);
-  resetBtn.addEventListener("click", reset);
-  downloadBtn.addEventListener("click", () => {
-    const link = document.createElement("a");
-    link.download = "line2image.png";
-    link.href = canvas.toDataURL("image/png");
-    link.click();
-  });
+}
 
-  pauseBtn.disabled = true;
 
-  (async () => {
+/* =========================================
+   START DRAWING
+========================================= */
+
+drawButton.onclick =
+    () => {
+
+        if (
+            !strokes.length
+        )
+            return;
+
+
+        if (
+            currentStep >=
+            totalSteps
+        ) {
+
+            currentStep = 0;
+
+        }
+
+
+        drawing = true;
+
+        paused = false;
+
+
+        drawButton.disabled =
+            true;
+
+
+        pauseButton.disabled =
+            false;
+
+
+        pauseButton.textContent =
+            "Ⅱ Pause";
+
+
+        status.textContent =
+            "Drawing…";
+
+
+        animationFrame =
+            requestAnimationFrame(
+                animate
+            );
+
+    };
+
+
+/* =========================================
+   PAUSE / RESUME
+========================================= */
+
+pauseButton.onclick =
+    () => {
+
+        if (
+            drawing
+        ) {
+
+            drawing = false;
+
+            paused = true;
+
+
+            pauseButton.textContent =
+                "▶ Resume";
+
+
+            drawButton.disabled =
+                false;
+
+
+            status.textContent =
+                "Paused";
+
+
+        } else {
+
+            drawing = true;
+
+            paused = false;
+
+
+            pauseButton.textContent =
+                "Ⅱ Pause";
+
+
+            drawButton.disabled =
+                true;
+
+
+            animationFrame =
+                requestAnimationFrame(
+                    animate
+                );
+
+        }
+
+    };
+
+
+/* =========================================
+   RESET
+========================================= */
+
+document
+    .getElementById("reset")
+    .onclick = () => {
+
+        cancelAnimationFrame(
+            animationFrame
+        );
+
+
+        drawing = false;
+
+        paused = false;
+
+        currentStep = 0;
+
+
+        render(0);
+
+
+        setProgress(0);
+
+
+        drawButton.disabled =
+            false;
+
+
+        pauseButton.disabled =
+            true;
+
+
+        pauseButton.textContent =
+            "Ⅱ Pause";
+
+
+        status.textContent =
+            "Ready — press Draw";
+
+    };
+
+
+/* =========================================
+   SAVE PNG
+========================================= */
+
+document
+    .getElementById("save")
+    .onclick = () => {
+
+        const link =
+            document.createElement(
+                "a"
+            );
+
+
+        link.download =
+            "line-art.png";
+
+
+        link.href =
+            canvas.toDataURL(
+                "image/png"
+            );
+
+
+        link.click();
+
+    };
+
+
+/* =========================================
+   CONTROLS
+========================================= */
+
+detail.oninput =
+    () => {
+
+        document
+            .getElementById(
+                "detailV"
+            )
+            .textContent =
+            detail.value;
+
+
+        if (
+            currentImage
+        ) {
+
+            prepareImage(
+                currentImage
+            );
+
+        }
+
+    };
+
+
+threshold.oninput =
+    () => {
+
+        document
+            .getElementById(
+                "thresholdV"
+            )
+            .textContent =
+            threshold.value;
+
+
+        if (
+            currentImage
+        ) {
+
+            prepareImage(
+                currentImage
+            );
+
+        }
+
+    };
+
+
+lineWidth.oninput =
+    () => {
+
+        document
+            .getElementById(
+                "widthV"
+            )
+            .textContent =
+            Number(
+                lineWidth.value
+            ).toFixed(1);
+
+
+        render(
+            Math.floor(
+                currentStep
+            )
+        );
+
+    };
+
+
+speed.oninput =
+    () => {
+
+        document
+            .getElementById(
+                "speedV"
+            )
+            .textContent =
+            Number(
+                speed.value
+            )
+            .toFixed(2)
+            .replace(
+                /0$/,
+                ""
+            ) + "×";
+
+    };
+
+
+/* =========================================
+   CUSTOM IMAGE UPLOAD
+========================================= */
+
+fileInput.onchange =
+    async event => {
+
+        const file =
+            event.target
+                .files?.[0];
+
+
+        if (!file)
+            return;
+
+
+        const url =
+            URL.createObjectURL(
+                file
+            );
+
+
+        try {
+
+            const image =
+                await loadImage(
+                    url
+                );
+
+
+            currentImage =
+                image;
+
+
+            await prepareImage(
+                image
+            );
+
+
+        } catch {
+
+            status.textContent =
+                "Could not load image.";
+
+        } finally {
+
+            URL.revokeObjectURL(
+                url
+            );
+
+        }
+
+    };
+
+
+/* =========================================
+   LOAD DEFAULT IMAGE
+========================================= */
+
+(async () => {
+
     try {
-      const img = await loadImage(DEFAULT_IMAGE);
-      await loadAndPrepare(img);
+
+        currentImage =
+            await loadImage(
+                DEFAULT_IMAGE
+            );
+
+
+        await prepareImage(
+            currentImage
+        );
+
+
     } catch {
-      empty.style.display = "block";
-      setStatus("Default image not found. Use Choose another image.");
+
+        loading.textContent =
+            "Default image missing";
+
+
+        status.textContent =
+            "Choose an image to begin.";
+
     }
-  })();
+
+})();
+
+
 })();
