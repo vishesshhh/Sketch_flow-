@@ -1,70 +1,222 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#0b0b0d">
-  <title>Line2Image — Continuous Line Art</title>
-  <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width,
+        initial-scale=1.0,
+        viewport-fit=cover"
+    >
+
+    <meta name="theme-color" content="#090909">
+
+    <title>Photo → Line Art</title>
+
+    <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
-  <main class="app">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">LINE2IMAGE</p>
-        <h1>Watch the image draw itself.</h1>
-        <p class="sub">A pen-like animation traces the image from a starting point until the complete line-art drawing appears.</p>
-      </div>
-      <label class="upload">
-        <input id="fileInput" type="file" accept="image/*">
-        <span>Choose another image</span>
-      </label>
+
+<main class="app">
+
+    <header class="header">
+
+        <div>
+            <div class="tag">
+                PHOTO → LINE ART
+            </div>
+
+            <h1>
+                Draw the photo.
+            </h1>
+
+            <p>
+                Turn a portrait into clean pen-style
+                line art and reveal it with an animated
+                drawing stroke.
+            </p>
+        </div>
+
+        <label class="upload">
+
+            <input
+                id="file"
+                type="file"
+                accept="image/*"
+            >
+
+            Choose photo
+
+        </label>
+
     </header>
 
-    <section class="panel">
-      <div class="canvas-wrap" id="canvasWrap">
-        <canvas id="canvas"></canvas>
-        <div class="empty" id="emptyState">Loading default image…</div>
-      </div>
 
-      <div class="controls">
-        <div class="control">
-          <label for="speed">Drawing speed <output id="speedOut">1.0×</output></label>
-          <input id="speed" type="range" min="0.25" max="3" value="1" step="0.05">
-        </div>
-        <div class="control">
-          <label for="threshold">Line sensitivity <output id="thresholdOut">145</output></label>
-          <input id="threshold" type="range" min="70" max="220" value="145" step="1">
-        </div>
-        <div class="control">
-          <label for="brush">Line width <output id="brushOut">1.25</output></label>
-          <input id="brush" type="range" min="0.5" max="3" value="1.25" step="0.05">
-        </div>
-        <div class="control color-control">
-          <label for="lineColor">Pen color</label>
-          <input id="lineColor" type="color" value="#202020">
-        </div>
-      </div>
+    <section class="card">
 
-      <div class="actions">
-        <button id="startBtn" class="primary">▶ Start drawing</button>
-        <button id="pauseBtn">Ⅱ Pause</button>
-        <button id="resetBtn">↺ Reset</button>
-        <button id="downloadBtn">↓ Save PNG</button>
-      </div>
+        <div class="stage">
 
-      <div class="status-row">
-        <span id="status">Preparing…</span>
-        <span id="progress">0%</span>
-      </div>
-      <div class="progress"><i id="progressBar"></i></div>
+            <canvas id="canvas"></canvas>
+
+            <div id="loading">
+                Loading…
+            </div>
+
+        </div>
+
+
+        <div class="controls">
+
+            <label>
+
+                Detail
+
+                <output id="detailV">
+                    55
+                </output>
+
+                <input
+                    id="detail"
+                    type="range"
+                    min="20"
+                    max="90"
+                    value="55"
+                >
+
+            </label>
+
+
+            <label>
+
+                Ink threshold
+
+                <output id="thresholdV">
+                    118
+                </output>
+
+                <input
+                    id="threshold"
+                    type="range"
+                    min="60"
+                    max="180"
+                    value="118"
+                >
+
+            </label>
+
+
+            <label>
+
+                Line width
+
+                <output id="widthV">
+                    1.1
+                </output>
+
+                <input
+                    id="width"
+                    type="range"
+                    min="0.5"
+                    max="2.5"
+                    step="0.1"
+                    value="1.1"
+                >
+
+            </label>
+
+
+            <label>
+
+                Speed
+
+                <output id="speedV">
+                    1.0×
+                </output>
+
+                <input
+                    id="speed"
+                    type="range"
+                    min="0.25"
+                    max="3"
+                    step="0.05"
+                    value="1"
+                >
+
+            </label>
+
+        </div>
+
+
+        <div class="buttons">
+
+            <button
+                id="draw"
+                class="primary"
+            >
+                ▶ Draw
+            </button>
+
+            <button
+                id="pause"
+                disabled
+            >
+                Ⅱ Pause
+            </button>
+
+            <button id="reset">
+                ↺ Reset
+            </button>
+
+            <button id="save">
+                ↓ PNG
+            </button>
+
+        </div>
+
+
+        <div class="status">
+
+            <span id="status">
+                Preparing line art…
+            </span>
+
+            <span id="pct">
+                0%
+            </span>
+
+        </div>
+
+
+        <div class="bar">
+
+            <i id="bar"></i>
+
+        </div>
+
     </section>
 
+
     <footer>
-      <strong>Default image:</strong> <code>assets/source.jpg</code>
-      <span>Replace that file with your own image (keep the same filename) to customize the version hosted on GitHub Pages.</span>
+
+        <b>Default image:</b>
+
+        <code>
+            assets/source.jpg
+        </code>
+
+        —
+
+        Replace this file to customize
+        the repository.
+
     </footer>
-  </main>
-  <script src="script.js"></script>
+
+</main>
+
+
+<script src="script.js"></script>
+
 </body>
 </html>
