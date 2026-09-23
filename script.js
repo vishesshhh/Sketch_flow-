@@ -1,1080 +1,989 @@
-"use strict";
+(() => {
+  "use strict";
 
+  // ============================================================
+  // SETTINGS
+  // ============================================================
 
-/*
-==========================================================
- LINE2IMAGE
- Photo → clean line art → animated drawing
-==========================================================
-*/
+  const DEFAULT_IMAGE = "assets/source.jpg";
+  const MAX_DIM = 1000;
 
+  // ============================================================
+  // ELEMENTS
+  // ============================================================
 
-const DEFAULT_IMAGE = "assets/source.jpg";
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d", { alpha: false });
 
-const MAX_SIZE = 900;
+  const input = document.getElementById("imageInput");
+  const replay = document.getElementById("replay");
+  const download = document.getElementById("download");
 
+  const loading = document.getElementById("loading");
+  const loadingText = document.getElementById("loadingText");
+  const statusEl = document.getElementById("status");
+  const percentEl = document.getElementById("percent");
+  const controls = document.getElementById("controls");
+  const hud = document.getElementById("hud");
 
-/* ELEMENTS */
+  // ============================================================
+  // ANIMATION STATE
+  // ============================================================
 
-const canvas =
-  document.getElementById("canvas");
+  let paths = [];
+  let totalPoints = 0;
 
-const ctx =
-  canvas.getContext("2d");
+  let pathIndex = 0;
+  let pointIndex = 0;
+  let completedPoints = 0;
 
-const loading =
-  document.getElementById("loading");
+  let animationFrame = 0;
+  let running = false;
+  let lastTime = 0;
 
-const imageInput =
-  document.getElementById("imageInput");
+  // ============================================================
+  // HELPERS
+  // ============================================================
 
-const generateButton =
-  document.getElementById("generate");
+  const wait = ms =>
+    new Promise(resolve => setTimeout(resolve, ms));
 
-const drawButton =
-  document.getElementById("draw");
-
-const pauseButton =
-  document.getElementById("pause");
-
-const resetButton =
-  document.getElementById("reset");
-
-const downloadButton =
-  document.getElementById("download");
-
-const detail =
-  document.getElementById("detail");
-
-const lineWidth =
-  document.getElementById("lineWidth");
-
-const speed =
-  document.getElementById("speed");
-
-const detailValue =
-  document.getElementById("detailValue");
-
-const widthValue =
-  document.getElementById("widthValue");
-
-const speedValue =
-  document.getElementById("speedValue");
-
-const status =
-  document.getElementById("status");
-
-const percentage =
-  document.getElementById("percentage");
-
-const progressBar =
-  document.getElementById("progressBar");
-
-
-/* STATE */
-
-let currentImage = null;
-
-let linePaths = [];
-
-let animationFrame = null;
-
-let drawing = false;
-
-let paused = false;
-
-let currentStroke = 0;
-
-let currentPoint = 0;
-
-let totalPoints = 0;
-
-let completedPoints = 0;
-
-let lastTime = 0;
-
-
-/* -------------------------------------------------------
-   HELPERS
-------------------------------------------------------- */
-
-function setStatus(text) {
-  status.textContent = text;
-}
-
-
-function updateProgress(value) {
-
-  value =
-    Math.max(
-      0,
-      Math.min(100, value)
-    );
-
-  percentage.textContent =
-    Math.round(value) + "%";
-
-  progressBar.style.width =
-    value + "%";
-}
-
-
-function clearCanvas() {
-
-  ctx.fillStyle = "#ffffff";
-
-  ctx.fillRect(
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  );
-}
-
-
-function fitImage(width, height) {
-
-  const scale =
-    Math.min(
-      1,
-      MAX_SIZE /
-      Math.max(width, height)
-    );
-
-  return {
-    width:
-      Math.round(width * scale),
-
-    height:
-      Math.round(height * scale)
-  };
-}
-
-
-/* -------------------------------------------------------
-   IMAGE LOADING
-------------------------------------------------------- */
-
-function loadImage(src) {
-
-  return new Promise(
-    (resolve, reject) => {
-
-      const img =
-        new Image();
-
-      img.onload =
-        () => resolve(img);
-
-      img.onerror =
-        reject;
-
-      img.src = src;
+  function setStatus(message, percent = null) {
+    if (statusEl) {
+      statusEl.textContent = message;
     }
-  );
-}
 
+    if (percent !== null && percentEl) {
+      percentEl.textContent = Math.round(percent) + "%";
+    }
+  }
 
-/* -------------------------------------------------------
-   PREPARE IMAGE
-------------------------------------------------------- */
+  function clearCanvas() {
+    ctx.save();
 
-function prepareImage(img) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-  currentImage = img;
-
-  const size =
-    fitImage(
-      img.naturalWidth,
-      img.naturalHeight
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(
+      0,
+      0,
+      canvas.width,
+      canvas.height
     );
 
+    ctx.restore();
+  }
 
-  canvas.width =
-    size.width;
+  function fitSize(width, height) {
+    const scale = Math.min(
+      1,
+      MAX_DIM / Math.max(width, height)
+    );
 
-  canvas.height =
-    size.height;
+    return {
+      width: Math.max(1, Math.round(width * scale)),
+      height: Math.max(1, Math.round(height * scale))
+    };
+  }
 
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
 
-  clearCanvas();
+      image.onload = () => resolve(image);
 
-  loading.style.display =
-    "none";
+      image.onerror = () =>
+        reject(
+          new Error("Could not load image: " + src)
+        );
 
+      image.crossOrigin = "anonymous";
+      image.src = src;
+    });
+  }
 
-  createLineArt();
-}
+  function distance(a, b) {
+    return Math.hypot(
+      a.x - b.x,
+      a.y - b.y
+    );
+  }
 
+  // ============================================================
+  // ORGANIZE THE LINE PATHS
+  // ============================================================
 
-/* -------------------------------------------------------
-   PHOTO → LINE ART
-------------------------------------------------------- */
+  function orderPaths(rawPaths) {
+    if (!rawPaths.length) {
+      return [];
+    }
 
-function createLineArt() {
+    const remaining = rawPaths.slice();
+    const ordered = [];
 
-  if (
-    typeof cv === "undefined" ||
-    !cv.Mat
-  ) {
+    let firstIndex = 0;
+    let bestStart = Infinity;
+
+    remaining.forEach((path, index) => {
+      const first = path[0];
+
+      const value =
+        first.x +
+        first.y;
+
+      if (value < bestStart) {
+        bestStart = value;
+        firstIndex = index;
+      }
+    });
+
+    let current =
+      remaining.splice(firstIndex, 1)[0];
+
+    ordered.push(current);
+
+    while (remaining.length) {
+      const lastPoint =
+        current[current.length - 1];
+
+      let selectedIndex = 0;
+      let bestDistance = Infinity;
+      let reverse = false;
+
+      for (
+        let i = 0;
+        i < remaining.length;
+        i++
+      ) {
+        const candidate = remaining[i];
+
+        const startDistance =
+          distance(
+            lastPoint,
+            candidate[0]
+          );
+
+        const endDistance =
+          distance(
+            lastPoint,
+            candidate[
+              candidate.length - 1
+            ]
+          );
+
+        const candidateDistance =
+          Math.min(
+            startDistance,
+            endDistance
+          );
+
+        if (
+          candidateDistance <
+          bestDistance
+        ) {
+          bestDistance =
+            candidateDistance;
+
+          selectedIndex = i;
+
+          reverse =
+            endDistance <
+            startDistance;
+        }
+      }
+
+      let next =
+        remaining.splice(
+          selectedIndex,
+          1
+        )[0];
+
+      if (reverse) {
+        next =
+          next
+            .slice()
+            .reverse();
+      }
+
+      ordered.push(next);
+
+      current = next;
+    }
+
+    return ordered;
+  }
+
+  // ============================================================
+  // WAIT FOR OPENCV
+  // ============================================================
+
+  async function waitForOpenCV() {
+    for (let i = 0; i < 180; i++) {
+      if (
+        window.cv &&
+        cv.Mat
+      ) {
+        return true;
+      }
+
+      await wait(100);
+    }
+
+    return false;
+  }
+
+  // ============================================================
+  // CONVERT IMAGE INTO LINE ART
+  // ============================================================
+
+  async function makeLineArt(image) {
+    cancelAnimationFrame(animationFrame);
+
+    running = false;
+
+    paths = [];
+
+    totalPoints = 0;
+
+    pathIndex = 0;
+    pointIndex = 0;
+    completedPoints = 0;
+
+    const size =
+      fitSize(
+        image.naturalWidth ||
+          image.width,
+        image.naturalHeight ||
+          image.height
+      );
+
+    canvas.width = size.width;
+    canvas.height = size.height;
+
+    clearCanvas();
+
+    if (loading) {
+      loading.style.display = "grid";
+    }
+
+    if (loadingText) {
+      loadingText.textContent =
+        "Preparing your drawing…";
+    }
 
     setStatus(
-      "Waiting for OpenCV…"
-    );
-
-    setTimeout(
-      createLineArt,
-      500
-    );
-
-    return;
-  }
-
-
-  setStatus(
-    "Analyzing photograph…"
-  );
-
-
-  /*
-  Create temporary OpenCV canvas
-  */
-
-  const sourceCanvas =
-    document.createElement("canvas");
-
-  sourceCanvas.width =
-    canvas.width;
-
-  sourceCanvas.height =
-    canvas.height;
-
-
-  const sourceContext =
-    sourceCanvas.getContext("2d");
-
-
-  sourceContext.drawImage(
-    currentImage,
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  );
-
-
-  let src =
-    cv.imread(sourceCanvas);
-
-
-  /*
-  Convert to grayscale
-  */
-
-  let gray =
-    new cv.Mat();
-
-  cv.cvtColor(
-    src,
-    gray,
-    cv.COLOR_RGBA2GRAY
-  );
-
-
-  /*
-  Remove photographic noise.
-  */
-
-  let smooth =
-    new cv.Mat();
-
-  cv.bilateralFilter(
-    gray,
-    smooth,
-    7,
-    55,
-    55,
-    cv.BORDER_DEFAULT
-  );
-
-
-  /*
-  Detail controls edge threshold.
-  Lower threshold = more lines.
-  */
-
-  const detailValueNumber =
-    Number(detail.value);
-
-
-  const highThreshold =
-    180 -
-    detailValueNumber;
-
-
-  const lowThreshold =
-    Math.max(
-      20,
-      highThreshold * 0.45
-    );
-
-
-  /*
-  Canny produces clean contours.
-  */
-
-  let edges =
-    new cv.Mat();
-
-  cv.Canny(
-    smooth,
-    edges,
-    lowThreshold,
-    highThreshold
-  );
-
-
-  /*
-  Slightly close small breaks.
-  This makes individual strokes
-  look more like continuous pen lines.
-  */
-
-  let kernel =
-    cv.getStructuringElement(
-      cv.MORPH_ELLIPSE,
-      new cv.Size(2, 2)
-    );
-
-
-  let cleaned =
-    new cv.Mat();
-
-
-  cv.morphologyEx(
-    edges,
-    cleaned,
-    cv.MORPH_CLOSE,
-    kernel
-  );
-
-
-  /*
-  Find contours.
-  */
-
-  let contours =
-    new cv.MatVector();
-
-  let hierarchy =
-    new cv.Mat();
-
-
-  cv.findContours(
-    cleaned,
-    contours,
-    hierarchy,
-    cv.RETR_LIST,
-    cv.CHAIN_APPROX_NONE
-  );
-
-
-  linePaths = [];
-
-
-  /*
-  Convert OpenCV contours into
-  JavaScript drawing paths.
-  */
-
-  for (
-    let i = 0;
-    i < contours.size();
-    i++
-  ) {
-
-    const contour =
-      contours.get(i);
-
-
-    if (
-      contour.rows < 8
-    ) {
-
-      contour.delete();
-
-      continue;
-    }
-
-
-    const points = [];
-
-
-    for (
-      let j = 0;
-      j < contour.rows;
-      j++
-    ) {
-
-      const point =
-        contour.intPtr(j, 0);
-
-      points.push({
-        x: point[0],
-        y: point[1]
-      });
-    }
-
-
-    /*
-    Remove extremely tiny contours.
-    */
-
-    if (
-      points.length >= 8
-    ) {
-
-      linePaths.push(points);
-    }
-
-
-    contour.delete();
-  }
-
-
-  /*
-  Long contours first.
-
-  This gives the animation a much
-  more natural drawing order than
-  simply revealing random pixels.
-  */
-
-  linePaths.sort(
-    (a, b) =>
-      b.length - a.length
-  );
-
-
-  /*
-  Avoid thousands of microscopic
-  paths overwhelming mobile devices.
-  */
-
-  linePaths =
-    linePaths.slice(
-      0,
-      1200
-    );
-
-
-  totalPoints =
-    linePaths.reduce(
-      (total, path) =>
-        total + path.length,
+      "Loading line-art engine…",
       0
     );
 
+    // Wait until OpenCV has loaded.
+    const ready =
+      await waitForOpenCV();
+
+    if (!ready) {
+      if (loadingText) {
+        loadingText.textContent =
+          "OpenCV could not be loaded.";
+      }
+
+      setStatus(
+        "Check your internet connection",
+        0
+      );
 
-  completedPoints = 0;
-
-  currentStroke = 0;
-
-  currentPoint = 0;
-
-
-  /*
-  Free OpenCV memory.
-  */
-
-  src.delete();
-  gray.delete();
-  smooth.delete();
-  edges.delete();
-  cleaned.delete();
-  kernel.delete();
-  contours.delete();
-  hierarchy.delete();
-
-
-  /*
-  Display initial blank canvas.
-  */
-
-  clearCanvas();
-
-
-  updateProgress(0);
-
-
-  setStatus(
-    `${linePaths.length} drawing strokes prepared`
-  );
-
-
-  drawButton.disabled = false;
-
-}
-
-
-/* -------------------------------------------------------
-   DRAW ONE PATH
-------------------------------------------------------- */
-
-function drawPath(
-  path,
-  endPoint
-) {
-
-  if (
-    !path ||
-    path.length === 0
-  ) {
-    return;
-  }
-
-
-  ctx.beginPath();
-
-
-  const first =
-    path[0];
-
-
-  ctx.moveTo(
-    first.x,
-    first.y
-  );
-
-
-  const limit =
-    Math.min(
-      endPoint,
-      path.length
-    );
-
-
-  for (
-    let i = 1;
-    i < limit;
-    i++
-  ) {
-
-    const p =
-      path[i];
-
-
-    ctx.lineTo(
-      p.x,
-      p.y
-    );
-  }
-
-
-  ctx.stroke();
-}
-
-
-/* -------------------------------------------------------
-   REDRAW CURRENT FRAME
-------------------------------------------------------- */
-
-function renderFrame() {
-
-  clearCanvas();
-
-
-  ctx.save();
-
-
-  ctx.strokeStyle =
-    "#202020";
-
-
-  ctx.lineWidth =
-    Number(lineWidth.value);
-
-
-  ctx.lineCap =
-    "round";
-
-
-  ctx.lineJoin =
-    "round";
-
-
-  for (
-    let i = 0;
-    i < currentStroke;
-    i++
-  ) {
-
-    drawPath(
-      linePaths[i],
-      linePaths[i].length
-    );
-  }
-
-
-  if (
-    currentStroke <
-    linePaths.length
-  ) {
-
-    drawPath(
-      linePaths[currentStroke],
-      currentPoint
-    );
-  }
-
-
-  ctx.restore();
-}
-
-
-/* -------------------------------------------------------
-   ANIMATION
-------------------------------------------------------- */
-
-function animate(time) {
-
-  if (
-    !drawing ||
-    paused
-  ) {
-    return;
-  }
-
-
-  if (!lastTime) {
-    lastTime = time;
-  }
-
-
-  const delta =
-    Math.min(
-      50,
-      time - lastTime
-    );
-
-
-  lastTime = time;
-
-
-  /*
-  Drawing speed.
-
-  Larger speed =
-  more points per frame.
-  */
-
-  const pointsPerFrame =
-    Math.max(
-      2,
-      5 *
-      Number(speed.value)
-    );
-
-
-  currentPoint +=
-    pointsPerFrame *
-    (delta / 16.67);
-
-
-  while (
-    currentStroke <
-    linePaths.length
-  ) {
-
-    const path =
-      linePaths[currentStroke];
-
-
-    if (
-      currentPoint <
-      path.length
-    ) {
-      break;
-    }
-
-
-    currentPoint -=
-      path.length;
-
-    currentStroke++;
-
-    completedPoints +=
-      path.length;
-  }
-
-
-  renderFrame();
-
-
-  const drawn =
-    Math.min(
-      totalPoints,
-      completedPoints +
-      currentPoint
-    );
-
-
-  const percent =
-    totalPoints
-      ? drawn / totalPoints * 100
-      : 100;
-
-
-  updateProgress(percent);
-
-
-  if (
-    currentStroke >=
-    linePaths.length
-  ) {
-
-    drawing = false;
-
-    paused = false;
-
-    setStatus(
-      "Finished — line art complete."
-    );
-
-    updateProgress(100);
-
-    drawButton.disabled =
-      false;
-
-    pauseButton.textContent =
-      "Ⅱ Pause";
-
-    return;
-  }
-
-
-  animationFrame =
-    requestAnimationFrame(
-      animate
-    );
-}
-
-
-/* -------------------------------------------------------
-   START
-------------------------------------------------------- */
-
-function startDrawing() {
-
-  if (
-    !linePaths.length
-  ) {
-
-    setStatus(
-      "Convert the image to line art first."
-    );
-
-    return;
-  }
-
-
-  if (
-    currentStroke >=
-    linePaths.length
-  ) {
-
-    resetDrawing();
-  }
-
-
-  drawing = true;
-
-  paused = false;
-
-  lastTime = 0;
-
-
-  drawButton.disabled =
-    true;
-
-
-  pauseButton.textContent =
-    "Ⅱ Pause";
-
-
-  setStatus(
-    "Drawing…"
-  );
-
-
-  animationFrame =
-    requestAnimationFrame(
-      animate
-    );
-}
-
-
-/* -------------------------------------------------------
-   PAUSE
-------------------------------------------------------- */
-
-function togglePause() {
-
-  if (!drawing && !paused) {
-    return;
-  }
-
-
-  paused =
-    !paused;
-
-
-  if (paused) {
-
-    drawing = false;
-
-    pauseButton.textContent =
-      "▶ Resume";
-
-    setStatus(
-      "Paused"
-    );
-
-    return;
-  }
-
-
-  drawing = true;
-
-  pauseButton.textContent =
-    "Ⅱ Pause";
-
-  lastTime = 0;
-
-  setStatus(
-    "Drawing…"
-  );
-
-
-  animationFrame =
-    requestAnimationFrame(
-      animate
-    );
-}
-
-
-/* -------------------------------------------------------
-   RESET
-------------------------------------------------------- */
-
-function resetDrawing() {
-
-  cancelAnimationFrame(
-    animationFrame
-  );
-
-
-  drawing = false;
-
-  paused = false;
-
-  currentStroke = 0;
-
-  currentPoint = 0;
-
-  completedPoints = 0;
-
-  lastTime = 0;
-
-
-  clearCanvas();
-
-  updateProgress(0);
-
-
-  pauseButton.textContent =
-    "Ⅱ Pause";
-
-
-  drawButton.disabled =
-    false;
-
-
-  setStatus(
-    "Ready"
-  );
-}
-
-
-/* -------------------------------------------------------
-   IMAGE UPLOAD
-------------------------------------------------------- */
-
-imageInput.addEventListener(
-  "change",
-  event => {
-
-    const file =
-      event.target.files[0];
-
-
-    if (!file) {
       return;
     }
 
+    if (loadingText) {
+      loadingText.textContent =
+        "Converting photo to line art…";
+    }
 
-    const url =
-      URL.createObjectURL(file);
+    setStatus(
+      "Converting photo to line art…",
+      0
+    );
 
+    // ==========================================================
+    // OFFSCREEN IMAGE
+    // ==========================================================
 
-    loadImage(url)
-      .then(img => {
+    const work =
+      document.createElement("canvas");
 
-        prepareImage(img);
+    work.width = size.width;
+    work.height = size.height;
 
-        URL.revokeObjectURL(
-          url
+    const workCtx =
+      work.getContext(
+        "2d",
+        {
+          willReadFrequently: true
+        }
+      );
+
+    workCtx.fillStyle = "#ffffff";
+
+    workCtx.fillRect(
+      0,
+      0,
+      size.width,
+      size.height
+    );
+
+    workCtx.drawImage(
+      image,
+      0,
+      0,
+      size.width,
+      size.height
+    );
+
+    // ==========================================================
+    // OPENCV PROCESSING
+    // ==========================================================
+
+    let src = null;
+    let gray = null;
+    let smooth = null;
+    let edges = null;
+    let closed = null;
+    let kernel = null;
+    let contours = null;
+    let hierarchy = null;
+
+    try {
+      src = cv.imread(work);
+
+      gray = new cv.Mat();
+      smooth = new cv.Mat();
+      edges = new cv.Mat();
+      closed = new cv.Mat();
+
+      kernel =
+        cv.getStructuringElement(
+          cv.MORPH_ELLIPSE,
+          new cv.Size(2, 2)
         );
 
-      })
-      .catch(() => {
+      contours =
+        new cv.MatVector();
 
-        setStatus(
-          "Could not load image."
+      hierarchy =
+        new cv.Mat();
+
+      // Grayscale
+      cv.cvtColor(
+        src,
+        gray,
+        cv.COLOR_RGBA2GRAY
+      );
+
+      // Smooth small image noise
+      cv.bilateralFilter(
+        gray,
+        smooth,
+        7,
+        55,
+        55,
+        cv.BORDER_DEFAULT
+      );
+
+      // Detect edges
+      cv.Canny(
+        smooth,
+        edges,
+        45,
+        125
+      );
+
+      // Close tiny gaps
+      cv.morphologyEx(
+        edges,
+        closed,
+        cv.MORPH_CLOSE,
+        kernel
+      );
+
+      // Extract contours
+      cv.findContours(
+        closed,
+        contours,
+        hierarchy,
+        cv.RETR_LIST,
+        cv.CHAIN_APPROX_NONE
+      );
+
+      const rawPaths = [];
+
+      for (
+        let i = 0;
+        i < contours.size();
+        i++
+      ) {
+        const contour =
+          contours.get(i);
+
+        if (contour.rows >= 16) {
+          const path = [];
+
+          for (
+            let j = 0;
+            j < contour.rows;
+            j++
+          ) {
+            const point =
+              contour.intPtr(j, 0);
+
+            path.push({
+              x: point[0],
+              y: point[1]
+            });
+          }
+
+          rawPaths.push(path);
+        }
+
+        contour.delete();
+      }
+
+      // Longest contours first
+      rawPaths.sort(
+        (a, b) =>
+          b.length - a.length
+      );
+
+      // Remove tiny noise
+      const filtered =
+        rawPaths
+          .filter(
+            path =>
+              path.length >= 16
+          )
+          .slice(0, 1400);
+
+      // Organize drawing order
+      paths =
+        orderPaths(filtered);
+
+      totalPoints =
+        paths.reduce(
+          (total, path) =>
+            total + path.length,
+          0
         );
 
-      });
+    } finally {
+      if (src) src.delete();
+      if (gray) gray.delete();
+      if (smooth) smooth.delete();
+      if (edges) edges.delete();
+      if (closed) closed.delete();
+      if (kernel) kernel.delete();
+      if (contours) contours.delete();
+      if (hierarchy) hierarchy.delete();
+    }
+
+    // ==========================================================
+    // START AUTOMATICALLY
+    // ==========================================================
+
+    if (loading) {
+      loading.style.display = "none";
+    }
+
+    clearCanvas();
+
+    if (!paths.length) {
+      setStatus(
+        "No line detail detected",
+        0
+      );
+
+      return;
+    }
+
+    setStatus(
+      "Starting automatically…",
+      0
+    );
+
+    // Small delay before drawing begins.
+    // No button/tap is required.
+    await wait(220);
+
+    startAnimation();
   }
-);
 
+  // ============================================================
+  // DRAW A PARTIAL PATH
+  // ============================================================
 
-/* -------------------------------------------------------
-   CONTROLS
-------------------------------------------------------- */
+  function drawPath(
+    path,
+    pointCount
+  ) {
+    if (
+      !path.length ||
+      pointCount <= 0
+    ) {
+      return;
+    }
 
-detail.addEventListener(
-  "input",
-  () => {
+    ctx.beginPath();
 
-    detailValue.textContent =
-      detail.value;
+    ctx.moveTo(
+      path[0].x,
+      path[0].y
+    );
+
+    const count =
+      Math.min(
+        pointCount,
+        path.length
+      );
+
+    for (
+      let i = 1;
+      i < count;
+      i++
+    ) {
+      ctx.lineTo(
+        path[i].x,
+        path[i].y
+      );
+    }
+
+    ctx.stroke();
   }
-);
 
+  // ============================================================
+  // RENDER CURRENT FRAME
+  // ============================================================
 
-lineWidth.addEventListener(
-  "input",
-  () => {
+  function render() {
+    clearCanvas();
 
-    widthValue.textContent =
-      Number(
-        lineWidth.value
-      ).toFixed(1);
+    ctx.save();
+
+    ctx.strokeStyle =
+      "#202020";
+
+    ctx.lineWidth =
+      Math.max(
+        0.8,
+        Math.min(
+          2.2,
+          canvas.width / 900
+        )
+      );
+
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    // Completed paths
+    for (
+      let i = 0;
+      i < pathIndex;
+      i++
+    ) {
+      drawPath(
+        paths[i],
+        paths[i].length
+      );
+    }
+
+    // Currently drawing path
+    if (
+      pathIndex <
+      paths.length
+    ) {
+      drawPath(
+        paths[pathIndex],
+        pointIndex
+      );
+    }
+
+    ctx.restore();
+  }
+
+  // ============================================================
+  // START ANIMATION
+  // ============================================================
+
+  function startAnimation() {
+    if (!paths.length) {
+      return;
+    }
+
+    cancelAnimationFrame(
+      animationFrame
+    );
+
+    running = true;
+    lastTime = 0;
+
+    if (controls) {
+      controls.style.opacity = "1";
+    }
+
+    if (hud) {
+      hud.style.opacity = "1";
+    }
+
+    animationFrame =
+      requestAnimationFrame(
+        animationFrameLoop
+      );
+  }
+
+  // ============================================================
+  // ANIMATION LOOP
+  // ============================================================
+
+  function animationFrameLoop(
+    timestamp
+  ) {
+    if (!running) {
+      return;
+    }
+
+    if (!lastTime) {
+      lastTime = timestamp;
+    }
+
+    const delta =
+      Math.min(
+        50,
+        timestamp - lastTime
+      );
+
+    lastTime = timestamp;
+
+    // Drawing speed
+    let advance =
+      Math.max(
+        2,
+        canvas.width / 170
+      ) *
+      (delta / 16.67);
+
+    while (
+      pathIndex <
+        paths.length &&
+      advance > 0
+    ) {
+      const currentPath =
+        paths[pathIndex];
+
+      const remaining =
+        currentPath.length -
+        pointIndex;
+
+      const amount =
+        Math.min(
+          remaining,
+          advance
+        );
+
+      pointIndex += amount;
+      advance -= amount;
+
+      if (
+        pointIndex >=
+        currentPath.length
+      ) {
+        completedPoints +=
+          currentPath.length;
+
+        pathIndex++;
+
+        pointIndex = 0;
+      }
+    }
+
+    render();
+
+    const percentage =
+      totalPoints
+        ? Math.min(
+            100,
+            (
+              (
+                completedPoints +
+                pointIndex
+              ) /
+              totalPoints
+            ) * 100
+          )
+        : 100;
+
+    // ==========================================================
+    // FINISHED
+    // ==========================================================
 
     if (
-      linePaths.length
+      pathIndex >=
+      paths.length
     ) {
-      renderFrame();
-    }
-  }
-);
+      running = false;
 
-
-speed.addEventListener(
-  "input",
-  () => {
-
-    speedValue.textContent =
-      speed.value + "×";
-  }
-);
-
-
-/* -------------------------------------------------------
-   BUTTONS
-------------------------------------------------------- */
-
-generateButton.addEventListener(
-  "click",
-  () => {
-
-    if (currentImage) {
-      createLineArt();
-    }
-  }
-);
-
-
-drawButton.addEventListener(
-  "click",
-  startDrawing
-);
-
-
-pauseButton.addEventListener(
-  "click",
-  togglePause
-);
-
-
-resetButton.addEventListener(
-  "click",
-  resetDrawing
-);
-
-
-downloadButton.addEventListener(
-  "click",
-  () => {
-
-    const link =
-      document.createElement("a");
-
-    link.download =
-      "line-art.png";
-
-    link.href =
-      canvas.toDataURL(
-        "image/png"
+      setStatus(
+        "Finished",
+        100
       );
 
-    link.click();
-  }
-);
+      if (controls) {
+        controls.style.opacity =
+          "0.22";
+      }
 
+      if (hud) {
+        hud.style.opacity =
+          "0.22";
+      }
 
-/* -------------------------------------------------------
-   DEFAULT IMAGE
-------------------------------------------------------- */
-
-async function initialize() {
-
-  try {
+      return;
+    }
 
     setStatus(
-      "Loading default image…"
+      "Drawing…",
+      percentage
     );
 
+    animationFrame =
+      requestAnimationFrame(
+        animationFrameLoop
+      );
+  }
 
-    const img =
-      await loadImage(
-        DEFAULT_IMAGE
+  // ============================================================
+  // CHOOSE ANOTHER IMAGE
+  // ============================================================
+  // Selecting an image automatically starts its animation.
+
+  if (input) {
+    input.addEventListener(
+      "change",
+      async event => {
+        const file =
+          event.target.files?.[0];
+
+        if (!file) {
+          return;
+        }
+
+        const objectURL =
+          URL.createObjectURL(
+            file
+          );
+
+        try {
+          const image =
+            await loadImage(
+              objectURL
+            );
+
+          await makeLineArt(
+            image
+          );
+
+        } catch (error) {
+          console.error(error);
+
+          setStatus(
+            "Could not load selected image",
+            0
+          );
+
+        } finally {
+          URL.revokeObjectURL(
+            objectURL
+          );
+
+          input.value = "";
+        }
+      }
+    );
+  }
+
+  // ============================================================
+  // REPLAY
+  // ============================================================
+
+  if (replay) {
+    replay.addEventListener(
+      "click",
+      () => {
+        if (!paths.length) {
+          return;
+        }
+
+        cancelAnimationFrame(
+          animationFrame
+        );
+
+        running = false;
+
+        pathIndex = 0;
+        pointIndex = 0;
+        completedPoints = 0;
+
+        if (controls) {
+          controls.style.opacity =
+            "1";
+        }
+
+        if (hud) {
+          hud.style.opacity =
+            "1";
+        }
+
+        clearCanvas();
+
+        setStatus(
+          "Replaying…",
+          0
+        );
+
+        setTimeout(
+          startAnimation,
+          100
+        );
+      }
+    );
+  }
+
+  // ============================================================
+  // SAVE FINAL LINE ART
+  // ============================================================
+
+  if (download) {
+    download.addEventListener(
+      "click",
+      () => {
+        const output =
+          document.createElement(
+            "canvas"
+          );
+
+        output.width =
+          canvas.width;
+
+        output.height =
+          canvas.height;
+
+        const outputCtx =
+          output.getContext("2d");
+
+        outputCtx.fillStyle =
+          "#ffffff";
+
+        outputCtx.fillRect(
+          0,
+          0,
+          output.width,
+          output.height
+        );
+
+        outputCtx.strokeStyle =
+          "#202020";
+
+        outputCtx.lineWidth =
+          Math.max(
+            0.8,
+            Math.min(
+              2.2,
+              output.width / 900
+            )
+          );
+
+        outputCtx.lineCap =
+          "round";
+
+        outputCtx.lineJoin =
+          "round";
+
+        for (
+          const path of paths
+        ) {
+          if (!path.length) {
+            continue;
+          }
+
+          outputCtx.beginPath();
+
+          outputCtx.moveTo(
+            path[0].x,
+            path[0].y
+          );
+
+          for (
+            let i = 1;
+            i < path.length;
+            i++
+          ) {
+            outputCtx.lineTo(
+              path[i].x,
+              path[i].y
+            );
+          }
+
+          outputCtx.stroke();
+        }
+
+        const link =
+          document.createElement(
+            "a"
+          );
+
+        link.download =
+          "line-art.png";
+
+        link.href =
+          output.toDataURL(
+            "image/png"
+          );
+
+        link.click();
+      }
+    );
+  }
+
+  // ============================================================
+  // 🚀 AUTOMATIC START — THIS RUNS WHEN THE WEBSITE OPENS
+  // ============================================================
+
+  (async () => {
+    try {
+      const image =
+        await loadImage(
+          DEFAULT_IMAGE
+        );
+
+      // Automatically process image.
+      // makeLineArt() automatically calls
+      // startAnimation() when processing finishes.
+      await makeLineArt(
+        image
       );
 
+    } catch (error) {
+      console.error(
+        "Automatic start failed:",
+        error
+      );
 
-    prepareImage(img);
+      if (loadingText) {
+        loadingText.textContent =
+          "Default image could not be loaded.";
+      }
 
-  } catch (error) {
+      setStatus(
+        "Put your image at assets/source.jpg",
+        0
+      );
+    }
+  })();
 
-    loading.textContent =
-      "Default image not found";
-
-
-    setStatus(
-      "Choose an image to begin."
-    );
-  }
-}
-
-
-initialize();
+})();
